@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import time
 import sqlite3
 import os
 import config  # 导入配置
@@ -134,6 +135,83 @@ class StockDataEngine:
         except Exception as e:
             print(f"❌ 批量下载严重错误: {e}")
             return
+        
+    def _flatten_columns(self, df):
+        """🔥 核心修复函数：强力展平列名 (解决 yfinance MultiIndex 问题)"""
+        # 如果是 MultiIndex (比如 Price, Ticker 两层)，只取第一层 (Price)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
+    
+    def get_existing_tables(self):
+        """获取数据库中已有的所有表名"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        return {row[0] for row in cursor.fetchall()}
+    
+    def update_minute_data(self, target_tickers=None):
+        """
+        [分钟线更新] 增量下载
+        :param target_tickers: 指定要下载的股票列表 (list)。如果不传，则默认下载 config.WATCHLIST
+        """
+        # 1. 确定要下载的目标列表
+        if target_tickers is None:
+            download_list = config.WATCHLIST
+        else:
+            download_list = target_tickers
+
+        print(f"⏱️ [分钟线检查] 目标清单共 {len(download_list)} 只股票...")
+        
+        # 2. 获取数据库中已有的表
+        existing_tables = self.get_existing_tables()
+        
+        # 3. 筛选出真正需要下载的 (数据库里没有的)
+        to_download = []
+        for ticker in download_list:
+            table_name = f"stock_1m_{ticker.replace('-', '_')}"
+            if table_name not in existing_tables:
+                to_download.append(ticker)
+        
+        if not to_download:
+            print("✅ 所有目标股票的分钟数据已存在，无需下载。")
+            return
+
+        print(f"📥 [增量下载] 发现 {len(to_download)} 只新股票，开始下载...")
+        
+        # 4. 只下载缺失的
+        for ticker in to_download:
+            try:
+                print(f"   Downloading {ticker} (1m, 7d)...")
+                # 再次强调：yfinance 1m 数据最多回溯 7天
+                df = yf.download(ticker, period="7d", interval="1m", auto_adjust=True, progress=False)
+                
+                if df.empty:
+                    print(f"   ⚠️ {ticker} 无数据")
+                    continue
+
+                df = self._flatten_columns(df) # 拍扁列名
+                df = df[df['Volume'] > 0].copy()
+                df = self._calculate_indicators(df)
+                
+                df.reset_index(inplace=True)
+                df['Ticker'] = ticker
+                
+                if 'Date' in df.columns:
+                    df.rename(columns={'Date': 'Datetime'}, inplace=True)
+                elif 'index' in df.columns:
+                     df.rename(columns={'index': 'Datetime'}, inplace=True)
+
+                df.columns = [str(c).replace(' ', '_') for c in df.columns]
+                
+                table_name = f"stock_1m_{ticker.replace('-', '_')}"
+                df.to_sql(table_name, self.conn, if_exists='replace', index=False)
+                
+                time.sleep(0.5)
+                
+            except Exception as e:
+                print(f"❌ {ticker} 下载失败: {e}")
+        
+        print("✅ 增量更新完成！")
 
     def get_latest_data(self, ticker):
         table_name = f"stock_{ticker.replace('-', '_')}"
@@ -145,3 +223,14 @@ class StockDataEngine:
     
     def close(self):
         self.conn.close()
+
+if __name__ == "__main__":
+    engine = StockDataEngine()
+    
+    # # 1. 更新日线数据 (用于长期趋势分析)
+    # engine.update_daily_data()
+    
+    # 2. 更新分钟数据 (用于盘中精确择时)
+    engine.update_minute_data()
+    
+    engine.close()
