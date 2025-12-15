@@ -1,0 +1,16 @@
+# 忽略 Mac 系统自动生成的 .DS_Store 文件（全局匹配）
+.DS_Store
+# 忽略所有目录下的 .DS_Store（防止子目录出现）
+**/.DS_Store
+
+# 忽略 Jupyter Notebook 的检查点文件夹（全局所有目录）
+.ipynb_checkpoints/
+# 忽略 ipynb 临时检查点文件
+*.ipynb~
+
+# 忽略 Python 编译生成的 __pycache__ 文件夹（全局所有目录）
+__pycache__/
+# 顺带忽略 Python 字节码文件（可选，推荐加）
+*.pyc
+*.pyo
+*.pyd
